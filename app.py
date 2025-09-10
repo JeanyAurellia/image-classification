@@ -97,21 +97,22 @@ def load_assets():
         if os.path.isfile("efficientnet_only_weights.weights.h5") and num_classes is not None:
             st.warning("Full model not found. Using fallback: EfficientNet architecture + weights.")
             
-            # Detect the correct input shape
+            # Detect the correct input shape by testing different architectures
             input_shape = detect_model_input_shape()
-            st.info(f"Detected input shape: {input_shape}")
             
-            try:
-                model = create_efficientnet_model(
-                    num_classes=num_classes, 
-                    input_shape=input_shape
-                )
-                model.load_weights("efficientnet_only_weights.weights.h5")
-                return model, classes
-            except Exception as weights_error:
-                st.error(f"Failed to load weights: {str(weights_error)}")
-                st.error("Please check if your weights file matches the expected architecture.")
-                raise weights_error
+            if input_shape is None:
+                st.error("Could not determine the correct model architecture.")
+                raise ValueError("Unable to detect model input shape")
+            
+            st.info(f"Using input shape: {input_shape}")
+            
+            # Build the final model with detected shape
+            model = create_efficientnet_model(
+                num_classes=num_classes, 
+                input_shape=input_shape
+            )
+            model.load_weights("efficientnet_only_weights.weights.h5")
+            return model, classes
         
         # 4) If nothing works, show the original error
         st.error(f"Could not load model or weights: {str(e)}")
