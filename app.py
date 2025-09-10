@@ -106,68 +106,61 @@ def load_assets():
         st.error("❌ Could not load classes.json or it's empty")
         st.stop()
 
-    # 2) Try to load full model first
-    try:
-        model = tf.keras.models.load_model("efficientnet_full_model.keras")
-        st.success("✅ Full model loaded successfully!")
-        return model, classes
-    except Exception as e:
-        error_msg = str(e)
-        st.info(f"Could not load full model: {error_msg[:200]}...")
+    # 2) Try keras file first (prioritas utama)
+    if os.path.isfile("efficientnet_full_model.keras"):
+        try:
+            # Coba berbagai cara load keras file
+            model = tf.keras.models.load_model("efficientnet_full_model.keras", compile=False)
+            st.success("✅ Full model loaded successfully (compile=False)!")
+            return model, classes
+        except Exception as e1:
+            try:
+                model = tf.keras.models.load_model("efficientnet_full_model.keras", custom_objects=None)
+                st.success("✅ Full model loaded successfully (custom_objects=None)!")
+                return model, classes
+            except Exception as e2:
+                try:
+                    model = tf.keras.models.load_model("efficientnet_full_model.keras", safe_mode=False)
+                    st.success("✅ Full model loaded successfully (safe_mode=False)!")
+                    return model, classes
+                except Exception as e3:
+                    st.warning(f"Keras file loading failed: {str(e1)[:150]}...")
+                    st.warning("Trying fallback methods...")
+
+    # 3) Fallback ke weights file (hanya jika keras gagal)
+    if os.path.isfile("efficientnet_only_weights.weights.h5"):
+        st.info("Trying to use weights file as fallback...")
         
-        # Extract input shape from error message
-        detected_shape = None
-        if "225, 225, 1" in error_msg:
-            detected_shape = (225, 225, 1)
-            st.info("🔍 Detected from error: Model expects (225, 225, 1)")
-        elif "224, 224, 3" in error_msg:
-            detected_shape = (224, 224, 3)
-            st.info("🔍 Detected from error: Model expects (224, 224, 3)")
-        elif "224, 224, 1" in error_msg:
-            detected_shape = (224, 224, 1)
-            st.info("🔍 Detected from error: Model expects (224, 224, 1)")
+        # Coba berbagai arsitektur umum
+        common_architectures = [
+            (224, 224, 3),  # RGB standard
+            (225, 225, 3),  # RGB high-res
+            (224, 224, 1),  # Grayscale standard
+            (225, 225, 1),  # Grayscale high-res
+        ]
         
-        # 3) Try with detected shape first
-        if detected_shape and os.path.isfile("efficientnet_only_weights.weights.h5"):
-            st.warning(f"Trying to build model with detected shape: {detected_shape}")
-            
-            if test_architecture(num_classes, detected_shape):
-                st.success("✅ Detected architecture is compatible with weights!")
+        for h, w, c in common_architectures:
+            try:
+                st.info(f"Testing architecture: {h}×{w}×{c}")
                 model = create_efficientnet_model(
                     num_classes=num_classes, 
-                    input_shape=detected_shape
+                    input_shape=(h, w, c)
                 )
                 model.load_weights("efficientnet_only_weights.weights.h5")
+                st.success(f"✅ Weights loaded with {h}×{w}×{c}!")
                 return model, classes
-            else:
-                st.warning("❌ Detected architecture not compatible with weights file")
-        
-        # 4) Fallback: test different architectures
-        if os.path.isfile("efficientnet_only_weights.weights.h5"):
-            weights_shape = detect_weights_compatible_shape(num_classes)
-            if weights_shape:
-                st.success(f"Building model with compatible architecture: {weights_shape}")
-                model = create_efficientnet_model(
-                    num_classes=num_classes, 
-                    input_shape=weights_shape
-                )
-                model.load_weights("efficientnet_only_weights.weights.h5")
-                st.success("✅ Model loaded with compatible architecture!")
-                return model, classes
-        
-        # 5) Show clear error message
-        st.error("❌ Could not load model with any architecture.")
-        st.error("")
-        st.error("**Diagnosis:**")
-        if detected_shape:
-            st.error(f"• Your .keras file expects: {detected_shape}")
-        st.error("• Your .weights.h5 file seems incompatible")
-        st.error("")
-        st.error("**Solutions:**")
-        st.error("1. **Recommended**: Delete the .weights.h5 file and use only the .keras file")
-        st.error("2. **Or**: Delete the .keras file and use only the .weights.h5 file")  
-        st.error("3. **Or**: Re-train to ensure both files match the same architecture")
-        st.stop()
+            except Exception:
+                continue
+    
+    # 4) Jika semua gagal, berikan instruksi yang jelas
+    st.error("❌ Could not load any model file.")
+    st.error("")
+    st.error("**For Streamlit Cloud deployment, try this:**")
+    st.error("1. **Use only the .keras file** - Delete the .weights.h5 file from your repo")
+    st.error("2. **Or use only the .weights.h5 file** - Delete the .keras file")
+    st.error("3. **Check TensorFlow version** - Your local vs cloud might be different")
+    st.error("4. **Re-save your model** with `model.save('model.keras', save_format='keras_v3')`")
+    st.stop()
 
 def get_expected_input(model):
     """Get (H, W, C) from model input."""
