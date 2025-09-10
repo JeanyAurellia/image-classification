@@ -92,14 +92,24 @@ def load_assets():
         st.success("✅ Full model loaded successfully!")
         return model, classes
     except Exception as e:
-        st.info(f"Could not load full model: {str(e)[:200]}...")
+        error_msg = str(e)
+        st.info(f"Could not load full model: {error_msg[:200]}...")
         
-        # 3) Try to detect architecture from full model file (even if loading fails)
-        detected_shape = detect_model_input_shape_from_full_model()
+        # Extract input shape from error message
+        detected_shape = None
+        if "225, 225, 1" in error_msg:
+            detected_shape = (225, 225, 1)
+            st.info("🔍 Detected from error: Model expects (225, 225, 1)")
+        elif "224, 224, 3" in error_msg:
+            detected_shape = (224, 224, 3)
+            st.info("🔍 Detected from error: Model expects (224, 224, 3)")
+        elif "224, 224, 1" in error_msg:
+            detected_shape = (224, 224, 1)
+            st.info("🔍 Detected from error: Model expects (224, 224, 1)")
         
+        # 3) Try with detected shape first
         if detected_shape and os.path.isfile("efficientnet_only_weights.weights.h5") and num_classes:
-            st.warning("Using detected architecture from full model file...")
-            st.info(f"Detected shape: {detected_shape}")
+            st.warning(f"Trying to build model with detected shape: {detected_shape}")
             
             try:
                 model = create_efficientnet_model(
@@ -110,7 +120,7 @@ def load_assets():
                 st.success("✅ Model built with detected architecture!")
                 return model, classes
             except Exception as arch_error:
-                st.warning(f"Detected architecture didn't work: {str(arch_error)[:100]}...")
+                st.warning(f"Detected architecture failed: {str(arch_error)[:150]}...")
         
         # 4) Fallback: test weights file with different architectures
         if os.path.isfile("efficientnet_only_weights.weights.h5") and num_classes:
@@ -118,6 +128,7 @@ def load_assets():
             
             weights_shape = detect_weights_input_shape(num_classes)
             if weights_shape:
+                st.success(f"Found compatible architecture: {weights_shape}")
                 model = create_efficientnet_model(
                     num_classes=num_classes, 
                     input_shape=weights_shape
@@ -126,12 +137,16 @@ def load_assets():
                 st.success("✅ Model built with weights-compatible architecture!")
                 return model, classes
         
-        # 5) Last resort
+        # 5) Last resort - provide clear guidance
         st.error("❌ Could not load model with any architecture.")
-        st.error("Possible solutions:")
-        st.error("1. Check if your .keras file and .weights.h5 file are from the same training")
-        st.error("2. Make sure classes.json exists and has the correct number of classes")
-        st.error("3. Verify your model files are not corrupted")
+        st.error("**Your files seem to be from different training sessions:**")
+        st.error(f"• Full model (.keras): Expects input shape around (225, 225, 1)")
+        st.error(f"• Weights file (.h5): Seems to be from a different model")
+        st.error("")
+        st.error("**Solutions:**")
+        st.error("1. Use model files from the same training session")
+        st.error("2. Or delete one file type and use only the other")
+        st.error("3. Re-train your model to ensure consistency")
         raise e
 
 def get_expected_input(model):
