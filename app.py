@@ -18,45 +18,107 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def create_efficientnet_model(num_classes, input_shape=(224,224,3), base_trainable=False, dropout_rate=0.2):
-    base = tf.keras.applications.EfficientNetB0(
-        include_top=False, weights='imagenet',
-        input_shape=input_shape, pooling='max'
-    )
+    # Determine if this should be grayscale or RGB based on input_shape
+    input_channels = input_shape[2]
+    
+    if input_channels == 1:
+        # For grayscale, we need to build without pre-trained weights
+        # since ImageNet weights are for RGB (3 channels)
+        base = tf.keras.applications.EfficientNetB0(
+            include_top=False, 
+            weights=None,  # No pre-trained weights for grayscale
+            input_shape=input_shape, 
+            pooling='max'
+        )
+    else:
+        # For RGB, use ImageNet weights
+        base = tf.keras.applications.EfficientNetB0(
+            include_top=False, 
+            weights='imagenet',
+            input_shape=input_shape, 
+            pooling='max'
+        )
+    
     base.trainable = base_trainable
     inputs = tf.keras.Input(shape=input_shape)
-    # Preprocessing ditanam di graph (konsisten dgn training)
-    x = tf.keras.applications.efficientnet.preprocess_input(inputs)
+    
+    # Only apply EfficientNet preprocessing for RGB images
+    if input_channels == 3:
+        x = tf.keras.applications.efficientnet.preprocess_input(inputs)
+    else:
+        # For grayscale, just normalize to [0,1] or [-1,1] depending on your training
+        x = inputs / 255.0  # Adjust this based on how you preprocessed during training
+    
     x = base(x)
     x = tf.keras.layers.Dropout(dropout_rate)(x)
     outputs = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
     model = tf.keras.Model(inputs, outputs)
     return model
 
+def detect_model_input_shape():
+    """
+    Try to detect the correct input shape by examining available weight files
+    or use a heuristic approach
+    """
+    # First, try to load the full model to get the correct shape
+    try:
+        temp_model = tf.keras.models.load_model("efficientnet_full_model.keras")
+        return temp_model.input_shape[1:]  # Remove batch dimension
+    except:
+        pass
+    
+    # If we have weights file, we can try to inspect it
+    # This is a fallback - you might need to adjust based on your actual model
+    if os.path.isfile("efficientnet_only_weights.weights.h5"):
+        # Based on your error, it seems your model expects 1 channel (grayscale)
+        # Adjust this if your model actually expects different dimensions
+        return (224, 224, 1)  # Grayscale
+    
+    # Default fallback
+    return (224, 224, 3)  # RGB
+
 @st.cache_resource
 def load_assets():
-    # 1) Load classes mapping lebih dulu (agar tahu num_classes untuk fallback)
+    # 1) Load classes mapping
     classes = None
     if os.path.isfile("classes.json"):
         with open("classes.json", "r") as f:
             classes = json.load(f)
     num_classes = len(classes) if classes else None
 
-    # 2) Coba load full model
+    # 2) Try to load full model first
     try:
         model = tf.keras.models.load_model("efficientnet_full_model.keras")
         return model, classes
     except Exception as e:
-        # 3) Fallback: bangun arsitektur + load weights (kalau tersedia)
+        st.info(f"Could not load full model: {str(e)}")
+        
+        # 3) Fallback: detect correct input shape and build model
         if os.path.isfile("efficientnet_only_weights.weights.h5") and num_classes is not None:
-            st.warning("Gagal memuat model penuh. Menggunakan fallback: arsitektur EfficientNet + weights.")
-            model = create_efficientnet_model(num_classes=num_classes, input_shape=(224,224,3))
-            model.load_weights("efficientnet_only_weights.weights.h5")
-            return model, classes
-        # 4) Jika tidak bisa fallback, lempar error asli agar terlihat lognya
+            st.warning("Full model not found. Using fallback: EfficientNet architecture + weights.")
+            
+            # Detect the correct input shape
+            input_shape = detect_model_input_shape()
+            st.info(f"Detected input shape: {input_shape}")
+            
+            try:
+                model = create_efficientnet_model(
+                    num_classes=num_classes, 
+                    input_shape=input_shape
+                )
+                model.load_weights("efficientnet_only_weights.weights.h5")
+                return model, classes
+            except Exception as weights_error:
+                st.error(f"Failed to load weights: {str(weights_error)}")
+                st.error("Please check if your weights file matches the expected architecture.")
+                raise weights_error
+        
+        # 4) If nothing works, show the original error
+        st.error(f"Could not load model or weights: {str(e)}")
         raise e
 
 def get_expected_input(model):
-    """Ambil (H, W, C) dari input model."""
+    """Get (H, W, C) from model input."""
     ishape = model.inputs[0].shape  # TensorShape([None, H, W, C])
     h = int(ishape[1]) if ishape[1] is not None else 224
     w = int(ishape[2]) if ishape[2] is not None else 224
@@ -65,51 +127,75 @@ def get_expected_input(model):
 
 def to_model_input(image_pil, target_size, channels):
     """
-    Convert PIL image -> np.ndarray batch (1,H,W,C) yang sesuai dengan ekspektasi model.
+    Convert PIL image -> np.ndarray batch (1,H,W,C) for model input.
     - target_size: (H, W)
-    - channels: 1 atau 3
+    - channels: 1 or 3
     """
-    img = ImageOps.exif_transpose(image_pil)  # perbaiki orientation
+    img = ImageOps.exif_transpose(image_pil)  # Fix orientation
+    
     if channels == 3:
         img = img.convert("RGB")
         img = ImageOps.fit(img, target_size, method=Image.LANCZOS)
         x = np.asarray(img, dtype=np.float32)  # (H,W,3)
     else:  # channels == 1
-        img = img.convert("L")
+        img = img.convert("L")  # Convert to grayscale
         img = ImageOps.fit(img, target_size, method=Image.LANCZOS)
         x = np.asarray(img, dtype=np.float32)  # (H,W)
         x = x[..., None]                       # (H,W,1)
+    
     x = x[None, ...]  # (1,H,W,C)
     return x
 
-model, classes = load_assets()
+# Load model and classes
+try:
+    model, classes = load_assets()
+    
+    # Get expected input dimensions
+    H, W, C = get_expected_input(model)
+    
+    if C not in (1, 3):
+        st.error(f"Unsupported input channels: C={C}. Must be 1 (grayscale) or 3 (RGB).")
+        st.stop()
+    
+    st.success(f"Model loaded successfully! Expected input: {H}×{W}×{C}")
+    
+    # UI
+    st.title("Product Image Classification (EfficientNetB0)")
+    img_w = st.sidebar.slider("Image preview width (px)", 160, 512, 320, 16)
+    
+    if C == 1:
+        st.info("📸 Model expects **grayscale** images")
+    else:
+        st.info("🌈 Model expects **RGB** images")
 
-# (Opsional) hard guard: jika model masih punya input channel 1, beri info
-H, W, C = get_expected_input(model)
-if C not in (1, 3):
-    st.error(f"Model input channels tidak didukung: C={C}. Harus 1 (grayscale) atau 3 (RGB).")
+    uploaded_file = st.file_uploader("Upload product image", type=["jpg","jpeg","png"])
+    
+    if uploaded_file is not None:
+        raw_image = Image.open(uploaded_file)
+        st.image(raw_image, caption="Uploaded Image", width=img_w)
+
+        # Prepare input according to model expectations
+        x = to_model_input(raw_image, (H, W), C)
+        
+        # Make prediction
+        with st.spinner("Classifying..."):
+            probs = model.predict(x, verbose=0)[0]
+            idx = int(np.argmax(probs))
+            conf = float(np.max(probs))
+            label = classes[idx] if classes else str(idx)
+
+        # Display results
+        st.markdown(f"<div class='pred-label'>Prediction: {label}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='pred-sub'>Confidence: {conf:.2%}</div>", unsafe_allow_html=True)
+        
+        # Show top predictions
+        if classes and len(classes) > 1:
+            st.subheader("Top Predictions:")
+            top_indices = np.argsort(probs)[::-1][:min(5, len(classes))]
+            for i, idx in enumerate(top_indices):
+                st.write(f"{i+1}. **{classes[idx]}**: {probs[idx]:.2%}")
+
+except Exception as e:
+    st.error("Failed to load the model. Please check your model files.")
+    st.exception(e)
     st.stop()
-
-st.title("Product Image Classification (EfficientNetB0)")
-img_w = st.sidebar.slider("Image preview width (px)", 160, 512, 320, 16)
-
-uploaded_file = st.file_uploader("Upload product image", type=["jpg","jpeg","png"])
-if uploaded_file is not None:
-    raw_image = Image.open(uploaded_file)
-    st.image(raw_image, caption="Uploaded Image", width=img_w)
-
-    # Resize & channel sesuai ekspektasi model (akan handle 224 vs 225, 1 vs 3)
-    x = to_model_input(raw_image, (H, W), C)
-
-    # ⚠️ Kode training kita MENANAM preprocess_input di dalam arsitektur model.
-    # Jadi di inference TIDAK perlu memanggil preprocess_input lagi di sini.
-    # Jika versi model Anda TIDAK menanam preprocessing, aktifkan baris berikut:
-    # x = tf.keras.applications.efficientnet.preprocess_input(x)
-
-    probs = model.predict(x, verbose=0)[0]
-    idx = int(np.argmax(probs))
-    conf = float(np.max(probs))
-    label = classes[idx] if classes else str(idx)
-
-    st.markdown(f"<div class='pred-label'>Prediction: {label}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='pred-sub'>Confidence: {conf:.2%}</div>", unsafe_allow_html=True)
