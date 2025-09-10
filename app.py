@@ -18,7 +18,7 @@ padding:10px 14px;border-radius:10px;display:inline-block;}
 @st.cache_resource
 def load_assets():
     # kalau kamu rename, pakai nama yang baru
-    model = tf.keras.models.load_model("efficientnet_full_mode_FIXED.keras", compile=False)
+    model = tf.keras.models.load_model("efficientnet_full_model_FIXED.keras", compile=False)
     with open("classes.json","r") as f:
         classes = json.load(f)
     return model, classes
