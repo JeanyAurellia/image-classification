@@ -55,27 +55,43 @@ def create_efficientnet_model(num_classes, input_shape=(224,224,3), base_trainab
     model = tf.keras.Model(inputs, outputs)
     return model
 
-def detect_model_input_shape():
-    """
-    Try to detect the correct input shape by examining available weight files
-    or use a heuristic approach
-    """
-    # First, try to load the full model to get the correct shape
+def test_architecture(num_classes, input_shape):
+    """Test if a specific architecture works with the weights file"""
     try:
-        temp_model = tf.keras.models.load_model("efficientnet_full_model.keras")
-        return temp_model.input_shape[1:]  # Remove batch dimension
-    except:
-        pass
+        test_model = create_efficientnet_model(
+            num_classes=num_classes, 
+            input_shape=input_shape
+        )
+        test_model.load_weights("efficientnet_only_weights.weights.h5")
+        del test_model  # Clean up
+        return True
+    except Exception:
+        return False
+
+def detect_weights_compatible_shape(num_classes):
+    """Test different architectures to find one compatible with weights file"""
+    if not os.path.isfile("efficientnet_only_weights.weights.h5"):
+        return None
+        
+    # Test configurations in order of likelihood
+    test_configs = [
+        (224, 224, 3),  # Standard RGB
+        (225, 225, 3),  # Higher res RGB  
+        (224, 224, 1),  # Standard grayscale
+        (225, 225, 1),  # Higher res grayscale
+    ]
     
-    # If we have weights file, we can try to inspect it
-    # This is a fallback - you might need to adjust based on your actual model
-    if os.path.isfile("efficientnet_only_weights.weights.h5"):
-        # Based on your error, it seems your model expects 1 channel (grayscale)
-        # Adjust this if your model actually expects different dimensions
-        return (224, 224, 1)  # Grayscale
+    st.info("🔍 Testing architectures to find weights compatibility...")
     
-    # Default fallback
-    return (224, 224, 3)  # RGB
+    for h, w, c in test_configs:
+        st.info(f"Testing {h}×{w}×{c}...")
+        if test_architecture(num_classes, (h, w, c)):
+            st.success(f"✅ Found compatible architecture: {h}×{w}×{c}")
+            return (h, w, c)
+        else:
+            st.warning(f"❌ {h}×{w}×{c} not compatible")
+    
+    return None
 
 @st.cache_resource
 def load_assets():
@@ -85,6 +101,10 @@ def load_assets():
         with open("classes.json", "r") as f:
             classes = json.load(f)
     num_classes = len(classes) if classes else None
+    
+    if not num_classes:
+        st.error("❌ Could not load classes.json or it's empty")
+        st.stop()
 
     # 2) Try to load full model first
     try:
@@ -108,46 +128,46 @@ def load_assets():
             st.info("🔍 Detected from error: Model expects (224, 224, 1)")
         
         # 3) Try with detected shape first
-        if detected_shape and os.path.isfile("efficientnet_only_weights.weights.h5") and num_classes:
+        if detected_shape and os.path.isfile("efficientnet_only_weights.weights.h5"):
             st.warning(f"Trying to build model with detected shape: {detected_shape}")
             
-            try:
+            if test_architecture(num_classes, detected_shape):
+                st.success("✅ Detected architecture is compatible with weights!")
                 model = create_efficientnet_model(
                     num_classes=num_classes, 
                     input_shape=detected_shape
                 )
                 model.load_weights("efficientnet_only_weights.weights.h5")
-                st.success("✅ Model built with detected architecture!")
                 return model, classes
-            except Exception as arch_error:
-                st.warning(f"Detected architecture failed: {str(arch_error)[:150]}...")
+            else:
+                st.warning("❌ Detected architecture not compatible with weights file")
         
-        # 4) Fallback: test weights file with different architectures
-        if os.path.isfile("efficientnet_only_weights.weights.h5") and num_classes:
-            st.warning("Testing different architectures to match weights file...")
-            
-            weights_shape = detect_weights_input_shape(num_classes)
+        # 4) Fallback: test different architectures
+        if os.path.isfile("efficientnet_only_weights.weights.h5"):
+            weights_shape = detect_weights_compatible_shape(num_classes)
             if weights_shape:
-                st.success(f"Found compatible architecture: {weights_shape}")
+                st.success(f"Building model with compatible architecture: {weights_shape}")
                 model = create_efficientnet_model(
                     num_classes=num_classes, 
                     input_shape=weights_shape
                 )
                 model.load_weights("efficientnet_only_weights.weights.h5")
-                st.success("✅ Model built with weights-compatible architecture!")
+                st.success("✅ Model loaded with compatible architecture!")
                 return model, classes
         
-        # 5) Last resort - provide clear guidance
+        # 5) Show clear error message
         st.error("❌ Could not load model with any architecture.")
-        st.error("**Your files seem to be from different training sessions:**")
-        st.error(f"• Full model (.keras): Expects input shape around (225, 225, 1)")
-        st.error(f"• Weights file (.h5): Seems to be from a different model")
+        st.error("")
+        st.error("**Diagnosis:**")
+        if detected_shape:
+            st.error(f"• Your .keras file expects: {detected_shape}")
+        st.error("• Your .weights.h5 file seems incompatible")
         st.error("")
         st.error("**Solutions:**")
-        st.error("1. Use model files from the same training session")
-        st.error("2. Or delete one file type and use only the other")
-        st.error("3. Re-train your model to ensure consistency")
-        raise e
+        st.error("1. **Recommended**: Delete the .weights.h5 file and use only the .keras file")
+        st.error("2. **Or**: Delete the .keras file and use only the .weights.h5 file")  
+        st.error("3. **Or**: Re-train to ensure both files match the same architecture")
+        st.stop()
 
 def get_expected_input(model):
     """Get (H, W, C) from model input."""
@@ -178,8 +198,9 @@ def to_model_input(image_pil, target_size, channels):
     x = x[None, ...]  # (1,H,W,C)
     return x
 
-# Load model and classes
+# Main app
 try:
+    # Load model and classes
     model, classes = load_assets()
     
     # Get expected input dimensions
@@ -189,7 +210,7 @@ try:
         st.error(f"Unsupported input channels: C={C}. Must be 1 (grayscale) or 3 (RGB).")
         st.stop()
     
-    st.success(f"Model loaded successfully! Expected input: {H}×{W}×{C}")
+    st.success(f"🎯 Model loaded successfully! Expected input: {H}×{W}×{C}")
     
     # UI
     st.title("Product Image Classification (EfficientNetB0)")
@@ -228,6 +249,5 @@ try:
                 st.write(f"{i+1}. **{classes[idx]}**: {probs[idx]:.2%}")
 
 except Exception as e:
-    st.error("Failed to load the model. Please check your model files.")
+    st.error("Failed to initialize the application.")
     st.exception(e)
-    st.stop()
