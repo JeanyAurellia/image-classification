@@ -7,7 +7,7 @@ Project ini dibuat untuk **Praktikum AI** guna memenuhi **mata kuliah Artificial
 
 ## 🔗 Live App
 
-👉 **Buka aplikasinya di sini:** **[Open the app](image-classification-praktikum.streamlit.app)**
+👉 **Buka aplikasinya di sini:** **[Open the app](https://image-classification-thing.streamlit.app/)**
 
 ---
 
