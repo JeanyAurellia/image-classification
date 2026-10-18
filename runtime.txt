@@ -1,1 +1,3 @@
-python-3.10
+# streamlit cloud default (python 3.13 compatible)
+# python-3.10 is no longer honored; let TF 2.22 handle 3.13
+
