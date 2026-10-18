@@ -1,8 +1,8 @@
 # UI
-streamlit~=1.37
+streamlit>=1.37
 
-# ML runtime
-tensorflow>=2.22
-numpy~=1.26
-pillow~=10.4
+# ML runtime (python 3.14 needs TF 2.22 rc + numpy 2.x + pillow 11+)
+tensorflow>=2.22.0rc0
+numpy>=2.2
+pillow>=11.0
 protobuf>=4.25,<6
